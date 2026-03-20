@@ -24,8 +24,45 @@ const { Header, Content, Sider } = Layout;
 const { TextArea } = Input;
 
 function App() {
+  const [isLoggedIn, setIsLoggedIn] = useState(localStorage.getItem('isLoggedIn') === 'true');
   const [activeTab, setActiveTab] = useState('tasks');
   const [collapsed, setCollapsed] = useState(false);
+
+  const handleLogin = (values) => {
+    if (values.username === 'admin' && values.password === '9999') {
+      localStorage.setItem('isLoggedIn', 'true');
+      setIsLoggedIn(true);
+      message.success('登录成功');
+    } else {
+      message.error('账号或密码错误');
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('isLoggedIn');
+    setIsLoggedIn(false);
+    message.success('已退出登录');
+  };
+
+  if (!isLoggedIn) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#f0f2f5' }}>
+        <Card title="系统登录" style={{ width: 350, boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
+          <Form onFinish={handleLogin}>
+            <Form.Item name="username" rules={[{ required: true, message: '请输入账号' }]}>
+              <Input prefix={<UserOutlined />} placeholder="账号 (admin)" size="large" />
+            </Form.Item>
+            <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
+              <Input.Password placeholder="密码 (9999)" size="large" />
+            </Form.Item>
+            <Form.Item style={{ marginBottom: 0 }}>
+              <Button type="primary" htmlType="submit" block size="large">登录</Button>
+            </Form.Item>
+          </Form>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -48,7 +85,9 @@ function App() {
         </Menu>
       </Sider>
       <Layout className="site-layout">
-        <Header className="site-layout-background" style={{ padding: 0, background: '#fff' }} />
+        <Header className="site-layout-background" style={{ padding: '0 24px', background: '#fff', display: 'flex', justifyContent: 'flex-end', alignItems: 'center' }}>
+          <Button type="primary" danger onClick={handleLogout}>退出登录</Button>
+        </Header>
         <Content style={{ margin: '16px' }}>
           <div className="site-layout-background" style={{ padding: 24, minHeight: 360 }}>
             {activeTab === 'sessions' && <SessionManager />}
