@@ -50,10 +50,10 @@ function App() {
         <Card title="系统登录" style={{ width: 350, boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
           <Form onFinish={handleLogin}>
             <Form.Item name="username" rules={[{ required: true, message: '请输入账号' }]}>
-              <Input prefix={<UserOutlined />} placeholder="账号 (admin)" size="large" />
+              <Input prefix={<UserOutlined />} placeholder="账号" size="large" />
             </Form.Item>
             <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
-              <Input.Password placeholder="密码 (9999)" size="large" />
+              <Input.Password placeholder="密码" size="large" />
             </Form.Item>
             <Form.Item style={{ marginBottom: 0 }}>
               <Button type="primary" htmlType="submit" block size="large">登录</Button>
