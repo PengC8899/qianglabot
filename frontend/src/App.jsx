@@ -2,17 +2,19 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Layout, Menu, Button, Table, Input, Form, Upload, 
   Card, Switch, Tag, message, Modal, InputNumber, Row, Col,
-  Statistic, Tooltip, Progress, Drawer, Popconfirm
+  Statistic, Tooltip, Progress, Drawer, Popconfirm, Tabs
 } from 'antd';
 import { 
   UploadOutlined, UserOutlined, SendOutlined, 
   HistoryOutlined, StopOutlined, CheckCircleOutlined,
-  SyncOutlined, FileTextOutlined, DeleteOutlined, PauseCircleOutlined
+  SyncOutlined, FileTextOutlined, DeleteOutlined, PauseCircleOutlined, UsergroupAddOutlined
 } from '@ant-design/icons';
 import { 
   getSessions, uploadSession, sendCode, login, checkSession, getSessionOtp,
   createTask, getTasks, getLogs, getWsUrl, getLogStats, getTaskTargets,
-  stopTask, deleteTask, batchCheckSessions, batchDeleteSessions, updateProfile
+  stopTask, deleteTask, restartTask, batchCheckSessions, batchDeleteSessions, updateProfile,
+  createInviteTask, joinAllSessionsToGroup, promoteAllSessionsToAdmins, runInviteOneClick,
+  getInviteAccounts, refreshInviteAccounts, addInviteTask, getInviteLogs, joinAllAccounts, leaveAllAccounts, stopInviteTasks
 } from './api';
 import BlacklistManager from './BlacklistManager';
 import ProxyManager from './ProxyManager';
@@ -38,6 +40,7 @@ function App() {
         >
           <Menu.Item key="sessions" icon={<UserOutlined />}>账号管理</Menu.Item>
           <Menu.Item key="tasks" icon={<SendOutlined />}>任务管理</Menu.Item>
+          <Menu.Item key="invite" icon={<UsergroupAddOutlined />}>邀请管理</Menu.Item>
           <Menu.Item key="blacklist" icon={<StopOutlined />}>黑名单</Menu.Item>
           <Menu.Item key="proxies" icon={<StopOutlined />}>代理管理</Menu.Item>
           <Menu.Item key="apikeys" icon={<StopOutlined />}>API Key管理</Menu.Item>
@@ -50,6 +53,7 @@ function App() {
           <div className="site-layout-background" style={{ padding: 24, minHeight: 360 }}>
             {activeTab === 'sessions' && <SessionManager />}
             {activeTab === 'tasks' && <TaskManager />}
+            {activeTab === 'invite' && <InviteManager />}
             {activeTab === 'blacklist' && <BlacklistManager />}
             {activeTab === 'proxies' && <ProxyManager />}
             {activeTab === 'apikeys' && <ApiKeyManager />}
@@ -75,7 +79,24 @@ const SessionManager = () => {
   const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
   const [phoneHash, setPhoneHash] = useState("");
+  const [tempSession, setTempSession] = useState("");
+  const [loginApiId, setLoginApiId] = useState(null);
+  const [loginApiHash, setLoginApiHash] = useState(null);
+  const [manualApiId, setManualApiId] = useState("34995631");
+  const [manualApiHash, setManualApiHash] = useState("49bff8c0eea73a487798b23d089c1b71");
+  const [loginPassword, setLoginPassword] = useState("");
   const [step, setStep] = useState(1);
+  const [managerModalOpen, setManagerModalOpen] = useState(false);
+  const [managerPhone, setManagerPhone] = useState("");
+  const [managerCode, setManagerCode] = useState("");
+  const [managerPhoneHash, setManagerPhoneHash] = useState("");
+  const [managerTempSession, setManagerTempSession] = useState("");
+  const [managerLoginApiId, setManagerLoginApiId] = useState(null);
+  const [managerLoginApiHash, setManagerLoginApiHash] = useState(null);
+  const [managerManualApiId, setManagerManualApiId] = useState("34995631");
+  const [managerManualApiHash, setManagerManualApiHash] = useState("49bff8c0eea73a487798b23d089c1b71");
+  const [managerLoginPassword, setManagerLoginPassword] = useState("");
+  const [managerStep, setManagerStep] = useState(1);
 
   const loadSessions = async () => {
     setLoading(true);
@@ -146,26 +167,96 @@ const SessionManager = () => {
 
   const handleSendCode = async () => {
     try {
-      const res = await sendCode(phone);
+      if (!phone.trim()) {
+        message.error("请输入手机号");
+        return;
+      }
+      if ((manualApiId && !manualApiHash) || (!manualApiId && manualApiHash)) {
+        message.error("API ID 和 API Hash 需要同时填写");
+        return;
+      }
+      const res = await sendCode(phone.trim(), manualApiId, manualApiHash);
       setPhoneHash(res.phone_code_hash);
+      setTempSession(res.temp_session || "");
+      if (res.api_id && res.api_hash) {
+          setLoginApiId(res.api_id);
+          setLoginApiHash(res.api_hash);
+      }
       setStep(2);
       message.success("验证码已发送");
     } catch (e) {
-      message.error("发送验证码失败");
+      message.error("发送验证码失败: " + e.message);
     }
   };
 
   const handleLogin = async () => {
     try {
-      await login(phone, code, phoneHash);
+      await login(phone, code, phoneHash, loginApiId, loginApiHash, loginPassword, tempSession, false);
       message.success("登录成功");
       setIsModalOpen(false);
       loadSessions();
       setStep(1);
       setPhone("");
       setCode("");
+      setPhoneHash("");
+      setTempSession("");
+      setLoginApiId(null);
+      setLoginApiHash(null);
+      setLoginPassword("");
     } catch (e) {
-      message.error("登录失败");
+      message.error("登录失败: " + e.message);
+    }
+  };
+
+  const handleSendManagerCode = async () => {
+    try {
+      if (!managerPhone.trim()) {
+        message.error("请输入管理号手机号");
+        return;
+      }
+      if ((managerManualApiId && !managerManualApiHash) || (!managerManualApiId && managerManualApiHash)) {
+        message.error("API ID 和 API Hash 需要同时填写");
+        return;
+      }
+      const res = await sendCode(managerPhone.trim(), managerManualApiId, managerManualApiHash);
+      setManagerPhoneHash(res.phone_code_hash);
+      setManagerTempSession(res.temp_session || "");
+      if (res.api_id && res.api_hash) {
+        setManagerLoginApiId(res.api_id);
+        setManagerLoginApiHash(res.api_hash);
+      }
+      setManagerStep(2);
+      message.success("管理号验证码已发送");
+    } catch (e) {
+      message.error("发送验证码失败: " + e.message);
+    }
+  };
+
+  const handleManagerLogin = async () => {
+    try {
+      await login(
+        managerPhone,
+        managerCode,
+        managerPhoneHash,
+        managerLoginApiId,
+        managerLoginApiHash,
+        managerLoginPassword,
+        managerTempSession,
+        true
+      );
+      message.success("管理号登录成功");
+      setManagerModalOpen(false);
+      loadSessions();
+      setManagerStep(1);
+      setManagerPhone("");
+      setManagerCode("");
+      setManagerPhoneHash("");
+      setManagerTempSession("");
+      setManagerLoginApiId(null);
+      setManagerLoginApiHash(null);
+      setManagerLoginPassword("");
+    } catch (e) {
+      message.error("管理号登录失败: " + e.message);
     }
   };
 
@@ -209,13 +300,11 @@ const SessionManager = () => {
   const handleBatchCheck = async () => {
     if (selectedRowKeys.length === 0) return message.warning("请选择账号");
     try {
-      message.loading({ content: "批量检查中...", key: "batch_check", duration: 0 });
-      await batchCheckSessions(selectedRowKeys);
-      message.success({ content: "检查完成", key: "batch_check" });
-      loadSessions();
+      const res = await batchCheckSessions(selectedRowKeys);
+      message.success(res.message || "已在后台开始批量检测");
       setSelectedRowKeys([]);
     } catch (e) {
-      message.error({ content: "检查失败: " + e.message, key: "batch_check" });
+      message.error("检查失败: " + e.message);
     }
   };
 
@@ -256,8 +345,8 @@ const SessionManager = () => {
       }
       
       setLoading(true);
-      await updateProfile(formData);
-      message.success("更新成功");
+      const res = await updateProfile(formData);
+      message.success(res.message || "更新完成");
       setIsProfileModalOpen(false);
       profileForm.resetFields();
       loadSessions();
@@ -273,6 +362,12 @@ const SessionManager = () => {
     { title: "ID", dataIndex: "id", key: "id" },
     { title: "手机号", dataIndex: "phone", key: "phone" },
     { title: "昵称", dataIndex: "nickname", key: "nickname", render: t => t || '-' },
+    {
+      title: "角色",
+      dataIndex: "is_manager",
+      key: "is_manager",
+      render: v => v ? <Tag color="purple">管理号</Tag> : <Tag>协议号</Tag>
+    },
     { title: "健康分", dataIndex: "health_score", key: "health_score", render: score => <Tag color={score > 80 ? 'green' : score > 50 ? 'orange' : 'red'}>{score}</Tag> },
     { 
       title: "状态", 
@@ -307,6 +402,7 @@ const SessionManager = () => {
       <div style={{ marginBottom: 16, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
         <Button icon={<UploadOutlined />} onClick={() => setIsUploadModalOpen(true)}>上传</Button>
         <Button type="primary" onClick={() => setIsModalOpen(true)}>登录</Button>
+        <Button type="primary" ghost onClick={() => setManagerModalOpen(true)}>管理号登录</Button>
         <Button icon={<SyncOutlined />} onClick={loadSessions}>刷新</Button>
         
         <Button onClick={() => setIsProfileModalOpen(true)} disabled={selectedRowKeys.length === 0}>
@@ -397,12 +493,31 @@ const SessionManager = () => {
         {step === 1 ? (
           <div>
             <Input placeholder="手机号 (例如 +8613800000000)" value={phone} onChange={e => setPhone(e.target.value)} />
+            <Input style={{ marginTop: 10 }} placeholder="API ID（手动登录群主号建议填写）" value={manualApiId} onChange={e => setManualApiId(e.target.value)} />
+            <Input style={{ marginTop: 10 }} placeholder="API Hash（手动登录群主号建议填写）" value={manualApiHash} onChange={e => setManualApiHash(e.target.value)} />
             <Button type="primary" onClick={handleSendCode} style={{ marginTop: 10 }} block>发送验证码</Button>
           </div>
         ) : (
           <div>
             <Input placeholder="验证码" value={code} onChange={e => setCode(e.target.value)} />
+            <Input.Password placeholder="二级密码（若已开启）" value={loginPassword} onChange={e => setLoginPassword(e.target.value)} style={{ marginTop: 10 }} />
             <Button type="primary" onClick={handleLogin} style={{ marginTop: 10 }} block>登录</Button>
+          </div>
+        )}
+      </Modal>
+      <Modal title="管理号登录" open={managerModalOpen} onCancel={() => setManagerModalOpen(false)} footer={null}>
+        {managerStep === 1 ? (
+          <div>
+            <Input placeholder="管理号手机号 (例如 +8613800000000)" value={managerPhone} onChange={e => setManagerPhone(e.target.value)} />
+            <Input style={{ marginTop: 10 }} placeholder="API ID（建议管理号专用）" value={managerManualApiId} onChange={e => setManagerManualApiId(e.target.value)} />
+            <Input style={{ marginTop: 10 }} placeholder="API Hash（建议管理号专用）" value={managerManualApiHash} onChange={e => setManagerManualApiHash(e.target.value)} />
+            <Button type="primary" onClick={handleSendManagerCode} style={{ marginTop: 10 }} block>发送验证码</Button>
+          </div>
+        ) : (
+          <div>
+            <Input placeholder="验证码" value={managerCode} onChange={e => setManagerCode(e.target.value)} />
+            <Input.Password placeholder="二级密码（若已开启）" value={managerLoginPassword} onChange={e => setManagerLoginPassword(e.target.value)} style={{ marginTop: 10 }} />
+            <Button type="primary" onClick={handleManagerLogin} style={{ marginTop: 10 }} block>登录管理号</Button>
           </div>
         )}
       </Modal>
@@ -507,7 +622,7 @@ const TaskManager = () => {
   const loadTasks = async () => {
     try {
       setLoading(true);
-      const res = await getTasks();
+      const res = await getTasks('dm');
       setTasks(res.items);
     } catch (e) {
       // silent
@@ -577,6 +692,16 @@ const TaskManager = () => {
     }
   };
 
+  const handleRestart = async (id) => {
+      try {
+          await restartTask(id);
+          message.success("任务已重启");
+          loadTasks();
+      } catch (e) {
+          message.error("重启失败: " + e.message);
+      }
+  };
+
   const handleDelete = async (id) => {
     try {
         await deleteTask(id);
@@ -642,6 +767,11 @@ const TaskManager = () => {
                     <Popconfirm title="确定停止任务?" onConfirm={() => handleStop(record.id)}>
                         <Button size="small" icon={<PauseCircleOutlined />} danger>停止</Button>
                     </Popconfirm>
+                )}
+                {(record.status === 'stopped' || record.status === 'failed' || record.status === 'completed') && (
+                     <Popconfirm title="确定重启任务? 已发送目标将跳过。" onConfirm={() => handleRestart(record.id)}>
+                         <Button size="small" type="dashed">重启</Button>
+                     </Popconfirm>
                 )}
                 <Popconfirm title="确定删除任务?" description="这将删除相关日志和记录" onConfirm={() => handleDelete(record.id)}>
                     <Button size="small" icon={<DeleteOutlined />} danger />
@@ -730,6 +860,293 @@ const TaskManager = () => {
   );
 };
 
+const InviteManager = () => {
+  const [groupLink, setGroupLink] = useState('');
+  const [targets, setTargets] = useState("");
+  const [accounts, setAccounts] = useState([]);
+  const [logs, setLogs] = useState([]);
+  const [stats, setStats] = useState({ success: 0, fail: 0 });
+  const [loading, setLoading] = useState(false);
+  const [joining, setJoining] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+
+  const loadAccounts = async () => {
+    try {
+      const res = await getInviteAccounts();
+      setAccounts(res.items || []);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const loadLogs = async () => {
+    try {
+      const res = await getInviteLogs();
+      setLogs(res.logs || []);
+      if (res.stats) {
+        setStats(res.stats);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => {
+    loadAccounts();
+    loadLogs();
+    const interval = setInterval(() => {
+      loadAccounts();
+      loadLogs();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleRefresh = async () => {
+    if (!groupLink.trim()) {
+      message.error("请填写群链接");
+      return;
+    }
+    try {
+      setLoading(true);
+      const res = await refreshInviteAccounts(groupLink.trim());
+      message.success(res.message || "已在后台开始检测");
+    } catch (e) {
+      message.error("刷新失败: " + e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleJoinAll = async () => {
+    if (!groupLink.trim()) {
+      message.error("请填写群链接");
+      return;
+    }
+    try {
+      setJoining(true);
+      const res = await joinAllAccounts(groupLink.trim());
+      message.success(res.message || "已在后台开始进群任务");
+    } catch (e) {
+      message.error("进群失败: " + e.message);
+    } finally {
+      setJoining(false);
+    }
+  };
+
+  const handleLeaveAll = async () => {
+    if (!groupLink.trim()) {
+      message.error("请填写群链接");
+      return;
+    }
+    Modal.confirm({
+      title: '确认一键退群',
+      content: '这将让所有已在该群内的账号（包括管理员）退出群组，确定继续吗？',
+      okText: '确定退出',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          setLeaving(true);
+          const res = await leaveAllAccounts(groupLink.trim());
+          message.success(res.message || "已在后台开始退群任务");
+        } catch (e) {
+          message.error("退群失败: " + e.message);
+        } finally {
+          setLeaving(false);
+        }
+      }
+    });
+  };
+
+  const handleStopInvite = async () => {
+    try {
+      const res = await stopInviteTasks();
+      message.success(res.message || "已发送停止指令");
+      loadLogs();
+    } catch (e) {
+      message.error("停止失败: " + e.message);
+    }
+  };
+
+  const handleStartInvite = async () => {
+    const targetList = targets.split('\n').map(t => t.trim()).filter(t => t);
+    if (!groupLink.trim()) {
+      message.error("请填写群链接");
+      return;
+    }
+    if (targetList.length === 0) {
+      message.error("请至少输入一个目标用户");
+      return;
+    }
+
+    const availableAdmins = accounts.filter(a => a.is_admin && a.can_invite);
+    if (availableAdmins.length === 0) {
+      message.warning("没有可用的管理员账号，请先确保账号进群并拥有拉人权限");
+    }
+
+    let queuedCount = 0;
+    for (const target of targetList) {
+      try {
+        await addInviteTask(target, groupLink.trim());
+        queuedCount++;
+      } catch (e) {
+        console.error("Failed to add task for", target, e);
+      }
+    }
+    message.success(`已将 ${queuedCount} 个目标加入邀请队列`);
+    setTargets("");
+  };
+
+  const handleDeleteAccount = async (id) => {
+    try {
+      await batchDeleteSessions([id]);
+      message.success("账号已删除");
+      loadAccounts();
+    } catch (e) {
+      message.error("删除失败: " + e.message);
+    }
+  };
+
+  const accountColumns = [
+    { title: "ID", dataIndex: "session_id", key: "session_id", width: 60 },
+    { title: "手机号", dataIndex: "phone", key: "phone", width: 120 },
+    {
+      title: "群内状态",
+      key: "status",
+      render: (_, r) => {
+        if (!r.is_in_group) return <Tag color="default">未进群</Tag>;
+        if (r.is_admin) return <Tag color="purple">管理员</Tag>;
+        return <Tag color="blue">普通成员</Tag>;
+      }
+    },
+    {
+      title: "拉人权限",
+      key: "can_invite",
+      render: (_, r) => r.can_invite ? <Tag color="green">有</Tag> : <Tag color="red">无</Tag>
+    },
+    {
+      title: "成功/失败",
+      key: "stats",
+      render: (_, r) => (
+        <span>
+          <span style={{color: 'green'}}>{r.success_count || 0}</span> / <span style={{color: 'red'}}>{r.fail_count || 0}</span>
+        </span>
+      )
+    },
+    { title: "异常", dataIndex: "error", key: "error", ellipsis: true },
+    {
+      title: "操作",
+      key: "action",
+      render: (_, record) => (
+        <Popconfirm title="确定删除该账号吗?" onConfirm={() => handleDeleteAccount(record.session_id)}>
+          <Button size="small" icon={<DeleteOutlined />} danger />
+        </Popconfirm>
+      )
+    }
+  ];
+
+  const adminAccounts = accounts.filter(a => a.is_admin);
+
+  return (
+    <Row gutter={24}>
+      <Col span={12}>
+        <Card title="1. 目标群组与账号检测">
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 4 }}>目标群链接 (例如: https://t.me/xxx):</div>
+            <Input
+              placeholder="输入群链接"
+              value={groupLink}
+              onChange={e => setGroupLink(e.target.value)}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+              <Button type="default" onClick={handleJoinAll} loading={joining}>
+                一键让所有账号进群
+              </Button>
+              <Button type="primary" onClick={handleRefresh} loading={loading}>
+                刷新检测账号状态 (检测管理员与拉人权限)
+              </Button>
+              <Button type="default" danger onClick={handleLeaveAll} loading={leaving}>
+                一键退群
+              </Button>
+            </div>
+            
+            <Tabs defaultActiveKey="1">
+              <Tabs.TabPane tab={`全部账号 (${accounts.length})`} key="1">
+                <Table
+                  dataSource={accounts}
+                  columns={accountColumns}
+                  rowKey="session_id"
+                  size="small"
+                  pagination={{ pageSize: 5 }}
+                />
+              </Tabs.TabPane>
+              <Tabs.TabPane tab={`管理员账号 (${adminAccounts.length})`} key="2">
+                <Table
+                  dataSource={adminAccounts}
+                  columns={accountColumns}
+                  rowKey="session_id"
+                  size="small"
+                  pagination={{ pageSize: 5 }}
+                />
+              </Tabs.TabPane>
+            </Tabs>
+          </Card>
+        
+        <Card title="2. 批量拉人进群" style={{ marginTop: 24 }}>
+          <div style={{ marginBottom: 16, padding: 10, borderRadius: 6, background: '#fafafa', border: '1px solid #f0f0f0', color: '#555', fontSize: 12 }}>
+            系统会自动使用上述表格中具有“管理员”且“有拉人权限”的账号，轮流去邀请目标。<br/>
+            注意：大规模拉人会触发 Telegram 风控，系统已内置了 10~30 秒随机延迟和异常重试机制。
+          </div>
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ marginBottom: 4 }}>邀请目标 (每行一个 @username):</div>
+            <TextArea
+                rows={8}
+                placeholder="@user1\n@user2"
+                value={targets}
+              onChange={e => setTargets(e.target.value)}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <Button type="primary" block onClick={handleStartInvite} icon={<UsergroupAddOutlined />}>
+              开始邀请 (加入队列)
+            </Button>
+            <Button danger block onClick={handleStopInvite} icon={<StopOutlined />}>
+              停止邀请任务
+            </Button>
+          </div>
+        </Card>
+      </Col>
+      <Col span={12}>
+          <Card title="3. 实时任务执行日志">
+            <div style={{
+              background: '#1e1e1e',
+              color: '#00ff00',
+              fontFamily: 'monospace',
+              padding: 12,
+              borderRadius: 4,
+              height: '650px',
+              overflowY: 'auto',
+              fontSize: 12,
+              marginBottom: 16
+            }}>
+              {logs.length === 0 ? "暂无日志..." : logs.map((log, i) => (
+                <div key={i} style={{ marginBottom: 4, whiteSpace: 'pre-wrap', color: log.includes('失败') ? '#ff4d4f' : '#52c41a' }}>
+                  {log}
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0 16px', fontWeight: 'bold', fontSize: 16 }}>
+              <span style={{ color: '#52c41a' }}>总成功: {stats.success}</span>
+              <span style={{ color: '#ff4d4f' }}>总失败: {stats.fail}</span>
+            </div>
+          </Card>
+        </Col>
+    </Row>
+  );
+};
+
+
 const LogStats = () => {
   const [stats, setStats] = useState([]);
   const [limit, setLimit] = useState(0);
@@ -812,6 +1229,7 @@ const LogStats = () => {
 
 const LogViewer = ({ embedded, taskId }) => {
   const [logs, setLogs] = useState([]);
+  const [filter, setFilter] = useState('');
   const bottomRef = useRef(null);
   const wsRef = useRef(null);
 
@@ -850,7 +1268,18 @@ const LogViewer = ({ embedded, taskId }) => {
     };
   }, [taskId]);
 
+  const filteredLogs = logs.filter(log => {
+      if (!filter) return true;
+      return (
+          (log.target && log.target.includes(filter)) ||
+          (log.status && log.status.includes(filter)) ||
+          (log.error && log.error.includes(filter)) ||
+          (log.task_id && String(log.task_id).includes(filter))
+      );
+  });
+
   const columns = [
+    { title: "ID", dataIndex: "task_id", key: "task_id", width: 80, render: id => <Tag>#{id}</Tag> },
     { title: "时间", dataIndex: "time", key: "time", width: 180 },
     { title: "目标", dataIndex: "target", key: "target" },
     { 
@@ -871,12 +1300,19 @@ const LogViewer = ({ embedded, taskId }) => {
       <LogStats />
       <Card title="实时日志" size={embedded ? "small" : "default"} extra={
         <div style={{ display: 'flex', gap: 8 }}>
+          <Input.Search 
+              placeholder="搜索日志..." 
+              allowClear 
+              onSearch={val => setFilter(val)} 
+              onChange={e => setFilter(e.target.value)} 
+              style={{ width: 200 }} 
+          />
           <Button size="small" danger onClick={() => setLogs([])}>清空日志</Button>
         </div>
       }>
         <div style={{ maxHeight: embedded ? 400 : 'calc(100vh - 400px)', overflowY: 'auto' }}>
           <Table 
-            dataSource={logs} 
+            dataSource={filteredLogs} 
             columns={columns} 
             rowKey={(r) => r.id || Math.random()} 
             pagination={false} 

@@ -28,3 +28,4 @@ backend/data.db
 
 # Project specific
 frontend/dist/
+backend/sessions/

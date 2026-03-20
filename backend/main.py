@@ -8,6 +8,7 @@ import logs
 import blacklist
 import proxies
 import apikeys
+import invite_system
 
 app = FastAPI()
 
@@ -22,6 +23,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(sessions.router)
 app.include_router(tasks.router)
+app.include_router(invite_system.router)
 app.include_router(logs.router, prefix="/logs", tags=["logs"])
 app.include_router(blacklist.router, prefix="/blacklist", tags=["blacklist"])
 app.include_router(proxies.router, prefix="/proxies", tags=["proxies"])

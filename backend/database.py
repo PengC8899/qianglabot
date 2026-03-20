@@ -30,7 +30,8 @@ async def init_db():
                 health_score INTEGER DEFAULT 100,
                 proxy_id INTEGER,
                 nickname TEXT,
-                session_string TEXT
+                session_string TEXT,
+                is_manager INTEGER DEFAULT 0
             )
             """
         )
@@ -41,6 +42,10 @@ async def init_db():
             pass
         try:
             await db.execute("ALTER TABLE sessions ADD COLUMN session_string TEXT")
+        except:
+            pass
+        try:
+            await db.execute("ALTER TABLE sessions ADD COLUMN is_manager INTEGER DEFAULT 0")
         except:
             pass
             
@@ -57,7 +62,10 @@ async def init_db():
                 total_count INTEGER DEFAULT 0,
                 success_count INTEGER DEFAULT 0,
                 fail_count INTEGER DEFAULT 0,
-                created_at TEXT
+                task_type TEXT DEFAULT 'dm',
+                group_link TEXT,
+                created_at TEXT,
+                allowed_session_ids TEXT
             )
             """
         )
@@ -72,6 +80,18 @@ async def init_db():
             pass
         try:
             await db.execute("ALTER TABLE tasks ADD COLUMN fail_count INTEGER DEFAULT 0")
+        except:
+            pass
+        try:
+            await db.execute("ALTER TABLE tasks ADD COLUMN task_type TEXT DEFAULT 'dm'")
+        except:
+            pass
+        try:
+            await db.execute("ALTER TABLE tasks ADD COLUMN group_link TEXT")
+        except:
+            pass
+        try:
+            await db.execute("ALTER TABLE tasks ADD COLUMN allowed_session_ids TEXT")
         except:
             pass
             
@@ -142,28 +162,40 @@ async def init_db():
                 api_id INTEGER,
                 api_hash TEXT,
                 description TEXT,
-                created_at TEXT
+                created_at TEXT,
+                last_used_at TEXT
             )
             """
         )
+        try:
+            await db.execute("ALTER TABLE api_keys ADD COLUMN last_used_at TEXT")
+        except:
+            pass
+            
+        # Add worker_id to sessions to track which task is using it
+        try:
+            await db.execute("ALTER TABLE sessions ADD COLUMN current_task_id INTEGER")
+        except:
+            pass
+
         await db.commit()
 
 
 async def execute(query: str, params: tuple = ()):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=20.0) as db:
         await db.execute(query, params)
         await db.commit()
 
 
 async def execute_returning_id(query: str, params: tuple = ()) -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=20.0) as db:
         cursor = await db.execute(query, params)
         await db.commit()
         return cursor.lastrowid
 
 
 async def fetch_all(query: str, params: tuple = ()):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=20.0) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(query, params) as cursor:
             rows = await cursor.fetchall()
@@ -171,7 +203,7 @@ async def fetch_all(query: str, params: tuple = ()):
 
 
 async def fetch_one(query: str, params: tuple = ()):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=20.0) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(query, params) as cursor:
             row = await cursor.fetchone()

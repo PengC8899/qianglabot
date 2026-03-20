@@ -58,6 +58,7 @@ async def get_log_stats(task_id: int | None = None):
 
     query = """
         SELECT 
+            l.task_id,
             l.session_id, 
             s.phone,
             SUM(CASE WHEN l.status = 'success' THEN 1 ELSE 0 END) as success,
@@ -65,7 +66,7 @@ async def get_log_stats(task_id: int | None = None):
         FROM logs l
         LEFT JOIN sessions s ON l.session_id = s.id
         WHERE l.task_id = ? AND l.session_id IS NOT NULL
-        GROUP BY l.session_id, s.phone
+        GROUP BY l.session_id, s.phone, l.task_id
     """
     
     rows = await fetch_all(query, (target_task_id,))

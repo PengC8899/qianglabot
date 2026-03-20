@@ -1,12 +1,13 @@
 import os
 import zipfile
 from io import BytesIO
-from fastapi import APIRouter, File, Form, UploadFile, HTTPException, Body
+from fastapi import APIRouter, File, Form, UploadFile, HTTPException, Body, BackgroundTasks
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from database import SESSION_DIR, execute, fetch_all, fetch_one, now_iso, get_db
 from pydantic import BaseModel
 import re
+from utils import get_proxy_config
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -26,6 +27,15 @@ async def upload_sessions(
         api_id_int = int(api_id)
     except:
         api_id_int = 0
+        
+    # If using default key or invalid, try to rotate
+    if api_id_int == 0 or api_id_int == 35019294:
+        from apikeys import get_next_api_key
+        key = await get_next_api_key()
+        if key:
+            api_id_int = key["api_id"]
+            api_hash = key["api_hash"]
+
     for file in files:
         content = await file.read()
         if file.filename.endswith(".zip"):
@@ -74,10 +84,12 @@ async def get_session_otp(session_id: int):
     if not session_row:
         raise HTTPException(status_code=404, detail="Session not found")
         
+    proxy = await get_proxy_config()
     client = TelegramClient(
         StringSession(session_row["session_string"]) if session_row["session_string"] else os.path.join(SESSION_DIR, session_row["session_file"]),
         session_row["api_id"],
-        session_row["api_hash"]
+        session_row["api_hash"],
+        proxy=proxy
     )
     
     try:
@@ -116,10 +128,12 @@ async def check_session_health(session_id: int):
     if not session_row:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    proxy = await get_proxy_config()
     client = TelegramClient(
         StringSession(session_row["session_string"]) if session_row["session_string"] else os.path.join(SESSION_DIR, session_row["session_file"]),
         session_row["api_id"],
-        session_row["api_hash"]
+        session_row["api_hash"],
+        proxy=proxy
     )
 
     status = "active"
@@ -160,17 +174,20 @@ async def check_session_health(session_id: int):
 
 
 @router.post("/batch_check")
-async def batch_check_sessions(payload: BatchIds):
+async def batch_check_sessions(payload: BatchIds, background_tasks: BackgroundTasks):
     ids = payload.ids
-    results = []
-    for sid in ids:
-        try:
-            res = await check_session_health(sid)
-            results.append(res)
-        except Exception as e:
-            print(f"Error checking session {sid}: {e}")
-            results.append({"id": sid, "status": "error", "error": str(e)})
-    return {"results": results}
+    
+    async def _process_batch(session_ids):
+        import asyncio
+        for sid in session_ids:
+            try:
+                await check_session_health(sid)
+            except Exception as e:
+                print(f"Error checking session {sid}: {e}")
+            await asyncio.sleep(1) # Prevent flooding
+
+    background_tasks.add_task(_process_batch, ids)
+    return {"status": "success", "message": f"已在后台开始批量检测 {len(ids)} 个账号"}
 
 
 @router.post("/batch_delete")
@@ -185,12 +202,12 @@ async def batch_delete_sessions(payload: BatchIds):
 
 @router.post("/update_profile")
 async def update_profile(
-    ids: list[str] = Form(...), # List of session IDs (comma separated string if using FormData)
+    background_tasks: BackgroundTasks,
+    ids: list[str] = Form(...),
     first_name: str = Form(None),
     about: str = Form(None),
     avatar: UploadFile = File(None)
 ):
-    # Parse ids from comma separated string
     session_ids = []
     if ids and isinstance(ids[0], str):
         try:
@@ -201,73 +218,79 @@ async def update_profile(
     if not session_ids:
         return {"status": "error", "message": "No IDs provided"}
 
-    print(f"Updating profile for {len(session_ids)} sessions. first_name={first_name}, about={about}, avatar={avatar}")
-
     from telethon.tl.functions.account import UpdateProfileRequest
     from telethon.tl.functions.photos import UploadProfilePhotoRequest
+    import asyncio
     
-    success_count = 0
-    
-    # Save avatar temporarily if provided
     avatar_path = None
     if avatar:
         avatar_path = f"/tmp/{avatar.filename}"
         with open(avatar_path, "wb") as f:
             f.write(await avatar.read())
 
-    for sid in session_ids:
-        try:
-            session_row = await fetch_one("SELECT * FROM sessions WHERE id = ?", (sid,))
-            
-            if not session_row: continue
+    async def _run_update_profile(session_ids, first_name, about, avatar_path):
+        success_count = 0
+        async def _update_single(sid):
+            nonlocal success_count
+            client = None
+            try:
+                session_row = await fetch_one("SELECT * FROM sessions WHERE id = ?", (sid,))
+                if not session_row: return
 
-            client = TelegramClient(
-                StringSession(session_row["session_string"]) if session_row.get("session_string") else os.path.join(SESSION_DIR, session_row["session_file"]),
-                session_row["api_id"],
-                session_row["api_hash"]
-            )
-            
-            await client.connect()
-            if not await client.is_user_authorized():
-                await client.disconnect()
-                continue
+                proxy = await get_proxy_config()
+                client = TelegramClient(
+                    StringSession(session_row["session_string"]) if session_row.get("session_string") else os.path.join(SESSION_DIR, session_row["session_file"]),
+                    session_row["api_id"],
+                    session_row["api_hash"],
+                    proxy=proxy
+                )
                 
-            # Update text info
-            if first_name or about:
-                await client(UpdateProfileRequest(
-                    first_name=first_name if first_name else None,
-                    about=about if about else None
-                ))
-                
-            # Update avatar
-            if avatar_path:
-                await client(UploadProfilePhotoRequest(
-                    file=await client.upload_file(avatar_path)
-                ))
-                
-            # Update local DB nickname
-            if first_name:
-                print(f"Updating local DB nickname for {sid} to {first_name}")
-                await execute("UPDATE sessions SET nickname = ? WHERE id = ?", (first_name, sid))
-            else:
-                # If nickname wasn't provided, try to fetch it from Telegram
-                try:
-                    me = await client.get_me()
-                    # Handle case where first_name or last_name might be None
-                    first = me.first_name or ""
-                    last = me.last_name or ""
-                    new_nickname = f"{first} {last}".strip()
-                    print(f"Fetched nickname for {sid}: {new_nickname}")
-                    await execute("UPDATE sessions SET nickname = ? WHERE id = ?", (new_nickname, sid))
-                except Exception as e:
-                    print(f"Failed to fetch nickname for {sid}: {e}")
+                await client.connect()
+                if not await client.is_user_authorized():
+                    return
+                    
+                if first_name or about:
+                    await client(UpdateProfileRequest(
+                        first_name=first_name if first_name else None,
+                        about=about if about else None
+                    ))
+                    
+                if avatar_path:
+                    await client(UploadProfilePhotoRequest(
+                        file=await client.upload_file(avatar_path)
+                    ))
+                    
+                if first_name:
+                    try:
+                        await execute("UPDATE sessions SET nickname = ? WHERE id = ?", (first_name, sid))
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        me = await client.get_me()
+                        first = me.first_name or ""
+                        last = me.last_name or ""
+                        new_nickname = f"{first} {last}".strip()
+                        await execute("UPDATE sessions SET nickname = ? WHERE id = ?", (new_nickname, sid))
+                    except Exception:
+                        pass
 
-            success_count += 1
-            await client.disconnect()
-        except Exception as e:
-            print(f"Update profile failed for {sid}: {e}")
+                success_count += 1
+            except Exception as e:
+                print(f"Update profile failed for {sid}: {e}")
+            finally:
+                if client and client.is_connected():
+                    await client.disconnect()
+
+        chunk_size = 5
+        for i in range(0, len(session_ids), chunk_size):
+            chunk = session_ids[i:i+chunk_size]
+            tasks = [_update_single(sid) for sid in chunk]
+            await asyncio.gather(*tasks)
+            await asyncio.sleep(1)
+
+        if avatar_path and os.path.exists(avatar_path):
+            os.remove(avatar_path)
             
-    if avatar_path and os.path.exists(avatar_path):
-        os.remove(avatar_path)
-        
-    return {"status": "success", "count": success_count}
+    background_tasks.add_task(_run_update_profile, session_ids, first_name, about, avatar_path)
+    return {"status": "success", "message": f"已在后台开始修改 {len(session_ids)} 个账号资料"}

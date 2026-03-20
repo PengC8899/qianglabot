@@ -53,12 +53,41 @@ export const updateProfile = (formData) => {
 };
 
 export const uploadSession = (formData) => apiUpload("/sessions/upload", formData);
-export const sendCode = (phone) => apiPost("/auth/send_code", { phone });
-export const login = (phone, code, phone_code_hash) => apiPost("/auth/login", { phone, code, phone_code_hash });
+export const sendCode = (phone, api_id, api_hash) => {
+    const payload = { phone };
+    if (api_id) payload.api_id = Number(api_id);
+    if (api_hash) payload.api_hash = api_hash;
+    return apiPost("/auth/send_code", payload);
+};
+export const login = (phone, code, phone_code_hash, api_id, api_hash, password, temp_session, as_manager = false) => {
+    const payload = { phone, code, phone_code_hash };
+    if (api_id) payload.api_id = Number(api_id);
+    if (api_hash) payload.api_hash = api_hash;
+    if (password) payload.password = password;
+    if (temp_session) payload.temp_session = temp_session;
+    if (as_manager) payload.as_manager = true;
+    return apiPost("/auth/login", payload);
+};
 export const createTask = (payload) => apiPost("/tasks/create", payload);
-export const getTasks = () => apiGet("/tasks");
+export const createInviteTask = (payload) => apiPost("/tasks/invite/create", payload);
+export const checkAccountsInGroup = async (group_link) => {
+  const res = await fetch(`${apiBase}/tasks/invite/check_accounts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ group_link })
+  });
+  return res.json();
+};
+export const joinAllSessionsToGroup = (group_link, options = {}) =>
+  apiPost("/tasks/invite/join_all", { group_link, ...options });
+export const promoteAllSessionsToAdmins = (group_link, options = {}) =>
+  apiPost("/tasks/invite/promote_admins", { group_link, ...options });
+export const runInviteOneClick = (payload) =>
+  apiPost("/tasks/invite/one_click", payload);
+export const getTasks = (taskType) => apiGet(taskType ? `/tasks?task_type=${encodeURIComponent(taskType)}` : "/tasks");
 export const getTaskTargets = (taskId) => apiGet(`/tasks/${taskId}/targets`);
 export const stopTask = (taskId) => apiPost(`/tasks/${taskId}/stop`);
+export const restartTask = (taskId) => apiPost(`/tasks/${taskId}/restart`);
 export const deleteTask = async (taskId) => {
   const res = await fetch(`${apiBase}/tasks/${taskId}`, { method: "DELETE" });
   if (!res.ok) throw new Error(await res.text());
@@ -119,3 +148,10 @@ export const deleteApiKey = async (id) => {
   return res.json();
 }
 
+export const getInviteAccounts = () => apiGet("/invite_v2/accounts");
+export const refreshInviteAccounts = (group_link) => apiPost("/invite_v2/accounts/refresh", { group_link });
+export const addInviteTask = (username, group_link) => apiPost("/invite_v2/invite", { username, group_link });
+export const stopInviteTasks = () => apiPost("/invite_v2/stop_all", {});
+export const getInviteLogs = () => apiGet("/invite_v2/logs");
+export const joinAllAccounts = (group_link) => apiPost("/invite_v2/accounts/join_all", { group_link });
+export const leaveAllAccounts = (group_link) => apiPost("/invite_v2/accounts/leave_all", { group_link });
