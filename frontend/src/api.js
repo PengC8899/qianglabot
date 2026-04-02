@@ -2,8 +2,19 @@ const apiBase =
   import.meta.env.VITE_API_BASE ||
   `${window.location.protocol}//${window.location.hostname}:8005`;
 
+const getAuthToken = () => localStorage.getItem("authToken") || "";
+
+const authHeaders = () => {
+  const token = getAuthToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
 export async function apiGet(path) {
-  const res = await fetch(`${apiBase}${path}`);
+  const res = await fetch(`${apiBase}${path}`, {
+    headers: {
+      ...authHeaders()
+    }
+  });
   if (!res.ok) {
     throw new Error(await res.text());
   }
@@ -14,7 +25,8 @@ export async function apiPost(path, payload) {
   const res = await fetch(`${apiBase}${path}`, {
     method: "POST",
     headers: {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      ...authHeaders()
     },
     body: JSON.stringify(payload)
   });
@@ -25,10 +37,11 @@ export async function apiPost(path, payload) {
 }
 
 export async function apiUpload(path, formData) {
-  // Do NOT set Content-Type header manually for FormData, 
-  // browser will set it with boundary automatically.
   const res = await fetch(`${apiBase}${path}`, {
     method: "POST",
+    headers: {
+      ...authHeaders()
+    },
     body: formData
   });
   if (!res.ok) {
@@ -45,6 +58,9 @@ export const batchDeleteSessions = (ids) => apiPost("/sessions/batch_delete", { 
 export const updateProfile = (formData) => {
   return fetch(`${apiBase}/sessions/update_profile`, {
     method: "POST",
+    headers: {
+      ...authHeaders()
+    },
     body: formData
   }).then(res => {
     if (!res.ok) return res.text().then(t => { throw new Error(t) });
@@ -53,6 +69,7 @@ export const updateProfile = (formData) => {
 };
 
 export const uploadSession = (formData) => apiUpload("/sessions/upload", formData);
+export const adminLogin = (username, password) => apiPost("/auth/admin_login", { username, password });
 export const sendCode = (phone, api_id, api_hash) => {
     const payload = { phone };
     if (api_id) payload.api_id = Number(api_id);
@@ -73,7 +90,7 @@ export const createInviteTask = (payload) => apiPost("/tasks/invite/create", pay
 export const checkAccountsInGroup = async (group_link) => {
   const res = await fetch(`${apiBase}/tasks/invite/check_accounts`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ group_link })
   });
   return res.json();
@@ -89,7 +106,12 @@ export const getTaskTargets = (taskId) => apiGet(`/tasks/${taskId}/targets`);
 export const stopTask = (taskId) => apiPost(`/tasks/${taskId}/stop`);
 export const restartTask = (taskId) => apiPost(`/tasks/${taskId}/restart`);
 export const deleteTask = async (taskId) => {
-  const res = await fetch(`${apiBase}/tasks/${taskId}`, { method: "DELETE" });
+  const res = await fetch(`${apiBase}/tasks/${taskId}`, {
+    method: "DELETE",
+    headers: {
+      ...authHeaders()
+    }
+  });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -98,10 +120,11 @@ export const getLogStats = (taskId) => apiGet(taskId ? `/logs/stats?task_id=${ta
 
 export function getWsUrl(taskId) {
   const wsBase = apiBase.replace(/^http/, "ws");
+  const token = encodeURIComponent(getAuthToken());
   if (taskId) {
-    return `${wsBase}/ws/logs?task_id=${taskId}`;
+    return `${wsBase}/ws/logs?task_id=${taskId}&token=${token}`;
   }
-  return `${wsBase}/ws/logs`;
+  return `${wsBase}/ws/logs?token=${token}`;
 }
 
 // Blacklist
@@ -112,7 +135,10 @@ export const addToBlacklist = (username, reason) =>
 
 export const removeFromBlacklist = async (username) => {
   const res = await fetch(`${apiBase}/blacklist/remove/${username}`, {
-    method: "DELETE"
+    method: "DELETE",
+    headers: {
+      ...authHeaders()
+    }
   });
   if (!res.ok) {
     throw new Error(await res.text());
@@ -125,7 +151,10 @@ export const getProxies = () => apiGet("/proxies/list");
 export const addProxies = (urls) => apiPost("/proxies/add", { urls });
 export const removeProxy = async (id) => {
   const res = await fetch(`${apiBase}/proxies/remove/${id}`, {
-    method: "DELETE"
+    method: "DELETE",
+    headers: {
+      ...authHeaders()
+    }
   });
   if (!res.ok) {
     throw new Error(await res.text());
@@ -140,7 +169,10 @@ export const checkApiKey = (id) => apiPost(`/apikeys/check/${id}`);
 export const batchCheckApiKeys = (ids) => apiPost("/apikeys/batch_check", { ids });
 export const deleteApiKey = async (id) => {
   const res = await fetch(`${apiBase}/apikeys/${id}`, {
-    method: "DELETE"
+    method: "DELETE",
+    headers: {
+      ...authHeaders()
+    }
   });
   if (!res.ok) {
     throw new Error(await res.text());
@@ -153,5 +185,7 @@ export const refreshInviteAccounts = (group_link) => apiPost("/invite_v2/account
 export const addInviteTask = (username, group_link) => apiPost("/invite_v2/invite", { username, group_link });
 export const stopInviteTasks = () => apiPost("/invite_v2/stop_all", {});
 export const getInviteLogs = () => apiGet("/invite_v2/logs");
+export const clearInviteLogs = () => apiPost("/invite_v2/clear_logs", {});
 export const joinAllAccounts = (group_link) => apiPost("/invite_v2/accounts/join_all", { group_link });
 export const leaveAllAccounts = (group_link) => apiPost("/invite_v2/accounts/leave_all", { group_link });
+export const clearInviteCooldowns = () => apiPost("/invite_v2/accounts/clear_cooldown", {});

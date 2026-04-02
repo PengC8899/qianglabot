@@ -78,10 +78,10 @@ async def get_log_stats(task_id: int | None = None):
 @router.get("")
 async def list_logs(task_id: int | None = None):
     if task_id is None:
-        rows = await fetch_all("SELECT * FROM logs ORDER BY id DESC LIMIT 200")
+        rows = await fetch_all("SELECT * FROM logs ORDER BY id DESC")
     else:
         rows = await fetch_all(
-            "SELECT * FROM logs WHERE task_id = ? ORDER BY id DESC LIMIT 200",
+            "SELECT * FROM logs WHERE task_id = ? ORDER BY id DESC",
             (task_id,),
         )
     return {"items": [dict(row) for row in rows]}

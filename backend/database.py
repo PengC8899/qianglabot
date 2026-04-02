@@ -177,6 +177,33 @@ async def init_db():
             await db.execute("ALTER TABLE sessions ADD COLUMN current_task_id INTEGER")
         except:
             pass
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_status_task_flood ON sessions(status, current_task_id, flood_wait)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_status_id ON sessions(status, id)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_logs_task_time ON logs(task_id, time)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_logs_task_status ON logs(task_id, status)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_task_targets_task_status_id ON task_targets(task_id, status, id)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_task_targets_task_worker ON task_targets(task_id, worker_session_id)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_status_type_created ON tasks(status, task_type, created_at)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_api_keys_last_used ON api_keys(last_used_at, id)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_proxies_status_last_used ON proxies(status, last_used, id)"
+        )
 
         await db.commit()
 

@@ -94,7 +94,7 @@ async def lock_one_session(task_id, task, attempted_ids, per_session_counts, all
               AND id IN ({placeholders})
               AND (current_task_id IS NULL OR current_task_id = ?)
               AND (flood_wait IS NULL OR flood_wait <= ?)
-            ORDER BY RANDOM()
+            ORDER BY id ASC
             """,
             tuple(allowed_ids) + (task_id, int(time.time())),
         )
@@ -106,10 +106,11 @@ async def lock_one_session(task_id, task, attempted_ids, per_session_counts, all
             WHERE status = 'active'
               AND (current_task_id IS NULL OR current_task_id = ?)
               AND (flood_wait IS NULL OR flood_wait <= ?)
-            ORDER BY RANDOM()
+            ORDER BY id ASC
             """,
             (task_id, int(time.time())),
         )
+    random.shuffle(rows)
     for row in rows:
         sid = row["id"]
         if sid in attempted_ids:
@@ -209,13 +210,24 @@ def classify_admin_error(error_text: str):
     return "UNKNOWN_ERROR"
 
 
-async def build_client_from_session(session_row):
-    api_id, api_hash = await pick_api_key_for_send(session_row)
+async def build_client_from_session(session_row, use_rotating_api=True, override_api=None):
+    from utils import get_proxy_config, get_device_fingerprint
+    if override_api:
+        api_id, api_hash = override_api
+    elif use_rotating_api:
+        api_id, api_hash = await pick_api_key_for_send(session_row)
+    else:
+        api_id, api_hash = session_row["api_id"], session_row["api_hash"]
     proxy = await get_proxy_config()
-    if session_row.get("session_string"):
-        return TelegramClient(StringSession(session_row["session_string"]), api_id, api_hash, proxy=proxy)
-    session_path = os.path.join(SESSION_DIR, session_row["session_file"])
-    return TelegramClient(session_path, api_id, api_hash, proxy=proxy)
+    fp = get_device_fingerprint()
+    session_string = session_row.get("session_string")
+    if session_string:
+        return TelegramClient(StringSession(session_string), api_id, api_hash, proxy=proxy, **fp)
+    session_file = session_row.get("session_file")
+    if not session_file:
+        raise ValueError("会话缺少 session_string 或 session_file")
+    session_path = os.path.join(SESSION_DIR, session_file)
+    return TelegramClient(session_path, api_id, api_hash, proxy=proxy, **fp)
 
 
 def build_invite_admin_rights(add_admins=False):
@@ -739,13 +751,15 @@ async def join_group_with_session(session_row, group_link: str):
     sid = session_row["id"]
     client = None
     try:
+        from utils import get_proxy_config, get_device_fingerprint
         api_id, api_hash = await pick_api_key_for_send(session_row)
         proxy = await get_proxy_config()
+        fp = get_device_fingerprint()
         if session_row.get("session_string"):
-            client = TelegramClient(StringSession(session_row["session_string"]), api_id, api_hash, proxy=proxy)
+            client = TelegramClient(StringSession(session_row["session_string"]), api_id, api_hash, proxy=proxy, **fp)
         else:
             session_path = os.path.join(SESSION_DIR, session_row["session_file"])
-            client = TelegramClient(session_path, api_id, api_hash, proxy=proxy)
+            client = TelegramClient(session_path, api_id, api_hash, proxy=proxy, **fp)
         await client.connect()
         if not await client.is_user_authorized():
             await execute("UPDATE sessions SET status = 'invalid' WHERE id = ?", (sid,))
@@ -942,13 +956,15 @@ async def send_once(task, task_id, target, target_db_id, session_row, per_sessio
     sid = session_row["id"]
     client = None
     try:
+        from utils import get_proxy_config, get_device_fingerprint
         api_id, api_hash = await pick_api_key_for_send(session_row)
         proxy = await get_proxy_config()
+        fp = get_device_fingerprint()
         if session_row.get("session_string"):
-            client = TelegramClient(StringSession(session_row["session_string"]), api_id, api_hash, proxy=proxy)
+            client = TelegramClient(StringSession(session_row["session_string"]), api_id, api_hash, proxy=proxy, **fp)
         else:
             session_path = os.path.join(SESSION_DIR, session_row["session_file"])
-            client = TelegramClient(session_path, api_id, api_hash, proxy=proxy)
+            client = TelegramClient(session_path, api_id, api_hash, proxy=proxy, **fp)
 
         await client.connect()
         if not await client.is_user_authorized():

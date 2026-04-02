@@ -2,17 +2,53 @@ import os
 import zipfile
 from io import BytesIO
 from fastapi import APIRouter, File, Form, UploadFile, HTTPException, Body, BackgroundTasks
-from telethon import TelegramClient
-from telethon.sessions import StringSession
+from telethon import TelegramClient, errors
 from database import SESSION_DIR, execute, fetch_all, fetch_one, now_iso, get_db
 from pydantic import BaseModel
 import re
-from utils import get_proxy_config
+from worker import build_client_from_session
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 class BatchIds(BaseModel):
     ids: list[int]
+
+
+async def detect_spambot_restriction(client: TelegramClient):
+    try:
+        async with client.conversation("@spambot", timeout=8) as conv:
+            await conv.send_message("/start")
+            resp = await conv.get_response()
+            text = (getattr(resp, "raw_text", None) or getattr(resp, "message", "") or "").lower()
+            safe_markers = [
+                "good news, no limits are currently applied to your account",
+                "good news! no limits are currently applied to your account",
+                "free as a bird",
+                "you can send messages to anyone",
+                "you can now send messages to everyone",
+                "目前你的账号没有限制",
+                "目前没有限制",
+                "未发现限制"
+            ]
+            risky_markers = [
+                "your account is limited",
+                "this account is limited",
+                "can currently only send messages to users who have your number",
+                "the limit will be lifted automatically",
+                "we've noticed some suspicious activity",
+                "your account was limited due to",
+                "目前你的账号受到限制",
+                "你的账号已被限制",
+                "暂时限制",
+                "只能向互为联系人发送消息"
+            ]
+            if any(marker in text for marker in safe_markers):
+                return False
+            if any(marker in text for marker in risky_markers):
+                return True
+            return None
+    except Exception:
+        return None
 
 
 @router.post("/upload")
@@ -84,13 +120,7 @@ async def get_session_otp(session_id: int):
     if not session_row:
         raise HTTPException(status_code=404, detail="Session not found")
         
-    proxy = await get_proxy_config()
-    client = TelegramClient(
-        StringSession(session_row["session_string"]) if session_row["session_string"] else os.path.join(SESSION_DIR, session_row["session_file"]),
-        session_row["api_id"],
-        session_row["api_hash"],
-        proxy=proxy
-    )
+    client = await build_client_from_session(session_row, use_rotating_api=False)
     
     try:
         await client.connect()
@@ -128,40 +158,60 @@ async def check_session_health(session_id: int):
     if not session_row:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    proxy = await get_proxy_config()
-    client = TelegramClient(
-        StringSession(session_row["session_string"]) if session_row["session_string"] else os.path.join(SESSION_DIR, session_row["session_file"]),
-        session_row["api_id"],
-        session_row["api_hash"],
-        proxy=proxy
-    )
+    client = await build_client_from_session(session_row, use_rotating_api=False)
 
-    status = "active"
+    status = session_row["status"] or "active"
     health_score = session_row["health_score"] if session_row["health_score"] is not None else 100
     nickname = session_row["nickname"]
     
     try:
         await client.connect()
         if not await client.is_user_authorized():
-            status = "invalid"
+            status = "invalid" # 这个就是代表被注销/掉线
             health_score = 0
         else:
             me = await client.get_me()
-            # Handle case where first_name or last_name might be None
-            first = me.first_name or ""
-            last = me.last_name or ""
-            nickname = f"{first} {last}".strip()
-            # simple check if restricted
-            if me.restricted:
-                status = "banned"
+            if not me:
+                status = "invalid"
                 health_score = 0
             else:
-                # Basic health check passed
-                health_score = min(100, health_score + 5) # recover score
-    except Exception as e:
+                nickname = me.first_name or nickname
+                is_restricted = bool(getattr(me, "restricted", False))
+                if not is_restricted:
+                    spambot_result = await detect_spambot_restriction(client)
+                    if spambot_result is True:
+                        is_restricted = True
+                if is_restricted:
+                    status = "restricted"
+                    health_score = min(health_score, 40)
+                else:
+                    status = "active"
+                    health_score = min(100, health_score + 5)
+    except errors.UserDeactivatedError:
+        status = "invalid" # 明确被注销
+        health_score = 0
+    except errors.SessionRevokedError:
+        status = "invalid" # 明确被注销/掉线
+        health_score = 0
+    except errors.AuthKeyUnregisteredError:
+        status = "invalid" # 明确被注销/掉线
+        health_score = 0
+    except errors.UserDeactivatedBanError:
         status = "invalid"
-        health_score = max(0, health_score - 20)
-        print(f"Health check error: {e}")
+        health_score = 0
+    except errors.UnauthorizedError:
+        status = "invalid"
+        health_score = 0
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "frozen_method_invalid" in error_msg or "restricted" in error_msg:
+            status = "restricted"
+            health_score = min(health_score, 40)
+        elif "timeout" in error_msg or "connection" in error_msg or "database is locked" in error_msg:
+            pass
+        else:
+            print(f"Health check error for {session_row['phone']}: {e}")
+            health_score = max(0, health_score - 10)
     finally:
         await client.disconnect()
 
@@ -179,15 +229,24 @@ async def batch_check_sessions(payload: BatchIds, background_tasks: BackgroundTa
     
     async def _process_batch(session_ids):
         import asyncio
-        for sid in session_ids:
-            try:
-                await check_session_health(sid)
-            except Exception as e:
-                print(f"Error checking session {sid}: {e}")
-            await asyncio.sleep(1) # Prevent flooding
+        # 将并发数降低，避免 sqlite 数据库锁定和服务器封禁
+        semaphore = asyncio.Semaphore(5)
+        
+        async def _check_with_sem(sid):
+            async with semaphore:
+                try:
+                    await check_session_health(sid)
+                except Exception as e:
+                    print(f"Error checking session {sid}: {e}")
+                # 增加延迟，降低请求频率
+                import random
+                await asyncio.sleep(random.uniform(1.5, 3.5))
+
+        tasks = [_check_with_sem(sid) for sid in session_ids]
+        await asyncio.gather(*tasks)
 
     background_tasks.add_task(_process_batch, ids)
-    return {"status": "success", "message": f"已在后台开始批量检测 {len(ids)} 个账号"}
+    return {"status": "success", "message": f"已在后台开启多线程并发检测 {len(ids)} 个账号"}
 
 
 @router.post("/batch_delete")
@@ -237,13 +296,7 @@ async def update_profile(
                 session_row = await fetch_one("SELECT * FROM sessions WHERE id = ?", (sid,))
                 if not session_row: return
 
-                proxy = await get_proxy_config()
-                client = TelegramClient(
-                    StringSession(session_row["session_string"]) if session_row.get("session_string") else os.path.join(SESSION_DIR, session_row["session_file"]),
-                    session_row["api_id"],
-                    session_row["api_hash"],
-                    proxy=proxy
-                )
+                client = await build_client_from_session(session_row, use_rotating_api=False)
                 
                 await client.connect()
                 if not await client.is_user_authorized():

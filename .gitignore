@@ -14,6 +14,9 @@ backend/sessions/*.session
 backend/data.db
 *.db
 *.sqlite3
+*.pem
+.env
+.env.*
 
 # OS
 .DS_Store

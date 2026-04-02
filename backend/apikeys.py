@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from database import fetch_all, execute, now_iso
 import random
-from utils import get_proxy_config
+from worker import build_client_from_session
 
 router = APIRouter()
 
@@ -101,36 +101,19 @@ async def check_key_endpoint(id: int):
     return await check_key_logic(id, session_row)
 
 async def get_valid_tester_session():
-    from telethon import TelegramClient, errors
-    from telethon.sessions import StringSession
-    import os
-    from database import SESSION_DIR
-    
-    # Fetch all active sessions
-    # Prefer session_string sessions first as they are faster/easier
     rows = await fetch_all("SELECT * FROM sessions WHERE status = 'active' ORDER BY session_string DESC, id ASC")
     
     for row in rows:
         client = None
         try:
-            proxy = await get_proxy_config()
-            # Test if this session is actually valid with its OWN credentials first
-            if row.get("session_string"):
-                client = TelegramClient(StringSession(row["session_string"]), row["api_id"], row["api_hash"], proxy=proxy)
-            else:
-                session_path = os.path.join(SESSION_DIR, row["session_file"])
-                client = TelegramClient(session_path, row["api_id"], row["api_hash"], proxy=proxy)
-            
+            client = await build_client_from_session(row, use_rotating_api=False)
             await client.connect()
             if await client.is_user_authorized():
-                # It's good!
                 await client.disconnect()
                 return row
             else:
-                # Invalid session, mark it
                 await execute("UPDATE sessions SET status = 'invalid' WHERE id = ?", (row["id"],))
         except Exception:
-             # Connection failed or other error, mark invalid or just skip
              pass
         finally:
             if client and client.is_connected():
@@ -139,10 +122,7 @@ async def get_valid_tester_session():
     return None
 
 async def check_key_logic(id: int, session: dict):
-    from telethon import TelegramClient, errors
-    from telethon.sessions import StringSession
-    import os
-    from database import SESSION_DIR
+    from telethon import errors
     
     # 1. Get the Key
     key_rows = await fetch_all("SELECT * FROM api_keys WHERE id = ?", (id,))
@@ -158,44 +138,13 @@ async def check_key_logic(id: int, session: dict):
     error_msg = None
     
     try:
-        proxy = await get_proxy_config()
-        # Construct client with the API Key we want to test
-        # We use the session data from 'session' but with new api_id/hash
-        if session.get("session_string"):
-            client = TelegramClient(
-                StringSession(session["session_string"]),
-                api_id,
-                api_hash,
-                proxy=proxy
-            )
-        else:
-            session_path = os.path.join(SESSION_DIR, session["session_file"])
-            client = TelegramClient(
-                session_path,
-                api_id,
-                api_hash,
-                proxy=proxy
-            )
-        
+        client = await build_client_from_session(session, use_rotating_api=False, override_api=(api_id, api_hash))
         await client.connect()
         
-        # If we can connect and authorization is valid, then API Key is valid.
         if not await client.is_user_authorized():
-            # This is tricky. If the session was valid with its own key, 
-            # but invalid with new key, it might mean the new key is incompatible 
-            # OR the session got invalidated.
-            # But usually, if API ID is bad, we get ApiIdInvalidError.
-            # If we get here, API ID is technically working to establish connection,
-            # but maybe the session doesn't like it. 
-            # However, for the purpose of "Testing API Key", if we can connect, 
-            # it usually means the Key is live.
-            # Let's try a simple call that doesn't require full auth if possible?
-            # No, we need auth to be sure.
-            # Let's assume it's 'unknown' but with a better message.
             status = "unknown" 
             error_msg = "账号与此Key不兼容或Key异常"
         else:
-             # Make a simple API call
              me = await client.get_me()
              status = "valid"
              error_msg = "正常"
